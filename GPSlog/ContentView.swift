@@ -57,7 +57,7 @@ struct ContentView: View {
                 Label("Settings", systemImage: "gear")
             }
         }
-        .fileImporter(isPresented: $showImport, allowedContentTypes: [.json]) { result in
+        .fileImporter(isPresented: $showImport, allowedContentTypes: [.json, .text, .content]) { result in
             switch result {
             case .success(let url):
                 Task {

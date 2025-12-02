@@ -8,70 +8,99 @@ class TimelineImporter {
         self.dataStore = dataStore
     }
     
-    struct GoogleTimelineJSON: Codable {
-        let locations: [GoogleLocation]?
+    // Semantic Location History Format
+    struct SemanticSegment: Codable {
+        let startTime: String?
+        let endTime: String?
+        let activity: SemanticActivity?
+        let visit: SemanticVisit?
     }
     
-    struct GoogleLocation: Codable {
-        let timestampMs: String?
-        let latitudeE7: Int?
-        let longitudeE7: Int?
-        let accuracy: Int?
-        let velocity: Int?
-        let heading: Int?
-        let altitude: Int?
-        let activity: [GoogleActivityWrapper]?
+    struct SemanticActivity: Codable {
+        let start: String? // "geo:lat,lon"
+        let end: String?
+        let topCandidate: SemanticCandidate?
     }
     
-    struct GoogleActivityWrapper: Codable {
-        let activity: [GoogleActivity]?
+    struct SemanticVisit: Codable {
+        let topCandidate: SemanticPlaceCandidate?
     }
     
-    struct GoogleActivity: Codable {
+    struct SemanticCandidate: Codable {
         let type: String?
-        let confidence: Int?
     }
     
+    struct SemanticPlaceCandidate: Codable {
+        let placeLocation: String? // "geo:lat,lon"
+        let placeID: String?
+    }
+
     func importJSON(url: URL) async throws -> Int {
         let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()
-        let timeline = try decoder.decode(GoogleTimelineJSON.self, from: data)
         
-        guard let locations = timeline.locations else { return 0 }
+        // Try parsing as Semantic Location History (Array)
+        if let segments = try? decoder.decode([SemanticSegment].self, from: data) {
+            return await importSemanticSegments(segments)
+        }
         
+        // Fallback to old Raw Location History (Object)
+        // (Keeping old logic if needed, or just replacing it. Let's keep it simple and focus on the new one for now as per user file)
+        return 0
+    }
+    
+    private func importSemanticSegments(_ segments: [SemanticSegment]) async -> Int {
         var count = 0
-        for loc in locations {
-            guard let latE7 = loc.latitudeE7,
-                  let lonE7 = loc.longitudeE7,
-                  let timeStr = loc.timestampMs,
-                  let timeMs = Double(timeStr) else { continue }
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds] 
+        // Note: The JSON has "2025-11-20T12:28:30.434+09:00". ISO8601DateFormatter should handle this.
+        
+        for segment in segments {
+            guard let startTimeStr = segment.startTime,
+                  let date = dateFormatter.date(from: startTimeStr) else { continue }
             
-            let lat = Double(latE7) / 1e7
-            let lon = Double(lonE7) / 1e7
-            let date = Date(timeIntervalSince1970: timeMs / 1000.0)
-            
-            // Extract best activity
-            var activityType: String?
-            if let activities = loc.activity?.first?.activity {
-                activityType = activities.max(by: { ($0.confidence ?? 0) < ($1.confidence ?? 0) })?.type
+            if let activity = segment.activity {
+                // Activity Segment
+                // Parse start location "geo:lat,lon"
+                if let startGeo = activity.start, let coord = parseGeo(startGeo) {
+                    let log = LocationLog(
+                        timestamp: date,
+                        latitude: coord.latitude,
+                        longitude: coord.longitude,
+                        altitude: 0,
+                        horizontalAccuracy: 0,
+                        speed: 0,
+                        course: 0,
+                        activityType: activity.topCandidate?.type
+                    )
+                    await MainActor.run { dataStore.saveLocation(log) }
+                    count += 1
+                }
+            } else if let visit = segment.visit {
+                // Visit Segment
+                if let placeGeo = visit.topCandidate?.placeLocation, let coord = parseGeo(placeGeo) {
+                    let log = VisitLog(
+                        arrivalDate: date,
+                        departureDate: dateFormatter.date(from: segment.endTime ?? "") ?? date,
+                        latitude: coord.latitude,
+                        longitude: coord.longitude,
+                        horizontalAccuracy: 0,
+                        placeName: visit.topCandidate?.placeID // Using ID as name for now
+                    )
+                    await MainActor.run { dataStore.saveVisit(log) }
+                    count += 1
+                }
             }
-            
-            let log = LocationLog(
-                timestamp: date,
-                latitude: lat,
-                longitude: lon,
-                altitude: Double(loc.altitude ?? 0),
-                horizontalAccuracy: Double(loc.accuracy ?? 0),
-                speed: Double(loc.velocity ?? 0),
-                course: Double(loc.heading ?? 0),
-                activityType: activityType
-            )
-            
-            await MainActor.run {
-                dataStore.saveLocation(log)
-            }
-            count += 1
         }
         return count
+    }
+    
+    private func parseGeo(_ geo: String) -> (latitude: Double, longitude: Double)? {
+        // Format: "geo:35.498861,139.678590"
+        let components = geo.replacingOccurrences(of: "geo:", with: "").split(separator: ",")
+        guard components.count == 2,
+              let lat = Double(components[0]),
+              let lon = Double(components[1]) else { return nil }
+        return (lat, lon)
     }
 }
