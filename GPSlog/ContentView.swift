@@ -1,66 +1,79 @@
-//
-//  ContentView.swift
-//  GPSlog
-//
-//  Created by Tamura Kyoco on 2025/12/02.
-//
-
 import SwiftUI
 import SwiftData
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
-
+    @EnvironmentObject var locationService: LocationService
+    @EnvironmentObject var dataStore: DataStore
+    @State private var showImport = false
+    
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
+        TabView {
+            NavigationView {
+                MapOverview()
+            }
+            .tabItem {
+                Label("Map", systemImage: "map")
+            }
+            
+            NavigationView {
+                LogListView()
+            }
+            .tabItem {
+                Label("Logs", systemImage: "list.bullet")
+            }
+            
+            NavigationView {
+                VisitListView()
+            }
+            .tabItem {
+                Label("Visits", systemImage: "house")
+            }
+            
+            NavigationView {
+                VStack {
+                    Button("Start Tracking") {
+                        locationService.requestPermissions()
+                        locationService.startTracking()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(locationService.isTracking)
+                    
+                    Button("Stop Tracking") {
+                        locationService.stopTracking()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!locationService.isTracking)
+                    
+                    Divider().padding()
+                    
+                    Button("Import Google Timeline") {
+                        showImport = true
                     }
                 }
-                .onDelete(perform: deleteItems)
+                .navigationTitle("Settings")
             }
-#if os(macOS)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-#endif
-            .toolbar {
-#if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-#endif
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
+            .tabItem {
+                Label("Settings", systemImage: "gear")
+            }
+        }
+        .fileImporter(isPresented: $showImport, allowedContentTypes: [.json]) { result in
+            switch result {
+            case .success(let url):
+                Task {
+                    guard url.startAccessingSecurityScopedResource() else { return }
+                    defer { url.stopAccessingSecurityScopedResource() }
+                    
+                    let importer = TimelineImporter(dataStore: dataStore)
+                    do {
+                        let count = try await importer.importJSON(url: url)
+                        print("Imported \(count) logs")
+                    } catch {
+                        print("Import failed: \(error)")
                     }
                 }
-            }
-        } detail: {
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+            case .failure(let error):
+                print("Import error: \(error)")
             }
         }
     }
-}
-
-#Preview {
-    ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
 }

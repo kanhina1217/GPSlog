@@ -1,32 +1,27 @@
-//
-//  GPSlogApp.swift
-//  GPSlog
-//
-//  Created by Tamura Kyoco on 2025/12/02.
-//
-
 import SwiftUI
 import SwiftData
 
 @main
 struct GPSlogApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+    @StateObject private var dataStore = DataStore()
+    @StateObject private var motionService = MotionService()
+    @StateObject private var locationService: LocationService
+    
+    init() {
+        let store = DataStore()
+        let motion = MotionService()
+        _dataStore = StateObject(wrappedValue: store)
+        _motionService = StateObject(wrappedValue: motion)
+        _locationService = StateObject(wrappedValue: LocationService(dataStore: store, motionService: motion))
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(dataStore)
+                .environmentObject(motionService)
+                .environmentObject(locationService)
+                .modelContainer(dataStore.container)
         }
-        .modelContainer(sharedModelContainer)
     }
 }
